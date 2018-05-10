@@ -1,7 +1,7 @@
 # -*- encoding=utf-8 -*-
 
 from arcsoft import CLibrary, ASVL_COLOR_FORMAT, ASVLOFFSCREEN, AFD_FSDKLibrary, AFR_FSDKLibrary, c_ubyte_p, FaceInfo
-from arcsoft.utils import BufferInfo, ImageLoader
+from arcsoft.utils import BufferInfo, ImageLoader, FileUtils
 from arcsoft.AFD_FSDKLibrary import *
 from arcsoft.AFR_FSDKLibrary import *
 from arcsoft.ASVL_COLOR_FORMAT import *
@@ -12,6 +12,10 @@ import cv2
 import cv2.cv as cv
 import sys
 import os
+from PIL.ImageFont import ImageFont
+import platform
+from win32api import GetSystemMetrics
+
 
 # APPID = c_char_p(b'4vZmni7LpV3BJixEqAu44NDgzTAjd1thw7ivfSh4T5mF')
 # FD_SDKKEY = c_char_p(b'HDnQWLCyTBaC323Xzwt8FMJorEdp4SDfNv6fGydyoP6u')
@@ -137,7 +141,8 @@ def addFeature2List(hFDEngine, hFREngine, inputImgPath, list):
             print(u'extract face feature in Image A failed')
             return False
         list.append(faceFeature)
-        nameList.append(inputImgPath)
+        name = FileUtils.getFileNameAndExt(inputImgPath)[0].decode('gbk').encode("utf-8")
+        nameList.append(name)
         return True
 
 def initFeatureList(rootdir, hFDEngine, hFREngine, list):
@@ -145,7 +150,7 @@ def initFeatureList(rootdir, hFDEngine, hFREngine, list):
     for i in range(0, len(piclist)):
         path = os.path.join(rootdir, piclist[i])
         if os.path.isfile(path) and ".jpg" == file_extension(path):
-            print path
+            print path.decode('gbk').encode("utf-8")
             addFeature2List(hFDEngine, hFREngine, path, list)
     return True
 
@@ -254,13 +259,16 @@ def loadImage(filePath):
     return inputImg
 
 
-def CatchUsbVideo(window_name, camera_idx, hFDEngine, hFREngine, list):
-    cv2.namedWindow(window_name)
+def handleRealtimeVideo(window_name, camera_idx, hFDEngine, hFREngine, list):
+    cv2.namedWindow(window_name, cv.CV_WINDOW_NORMAL)
     
+    if platform.system() == u'Windows':
+        screenWidth = GetSystemMetrics(0)
+        screenHeight = GetSystemMetrics(1)
+        boxSize = min(screenWidth, screenHeight)
     # 视频来源，可以来自一段已存好的视频，也可以直接来自USB摄像头
     cap = cv2.VideoCapture(camera_idx)
-    font = cv.InitFont(cv.CV_FONT_HERSHEY_SCRIPT_SIMPLEX, 1, 1, 0, 3, 8)     
-        
+ 
     while cap.isOpened():
         ok, frame = cap.read()  # 读取一帧数据
         if not ok:            
@@ -279,13 +287,18 @@ def CatchUsbVideo(window_name, camera_idx, hFDEngine, hFREngine, list):
             if fSimilScore.value > 0.5:
                 print nameList[i], "matched"
                 print(u'similarity is {0}'.format(fSimilScore))
-                cv2.putText(frame, nameList[i], (30, 30), cv2.FONT_HERSHEY_PLAIN, 1.0, (0, 255, 255), thickness=1)
-
+                cv2.putText(frame, nameList[i], (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 255), thickness=2)
+        if faceFeatureB != None:
+            faceFeatureB.freeUnmanaged();
         c = cv2.waitKey(10)
         if c & 0xFF == ord('q'):            
             break
-        
-        cv2.imshow(window_name, frame)
+        if platform.system() == u'Windows':
+#             resizedFrame = cv2.resize(frame, (boxSize, boxSize))
+#             cv2.imshow(window_name, resizedFrame)
+            cv2.imshow(window_name, frame)
+        else:
+            cv2.imshow(window_name, frame)
     
     # 释放摄像头并销毁所有窗口
     cap.release()
@@ -353,7 +366,7 @@ if __name__ == u'__main__':
 #     print(u'similarity between faceA and faceB is {0}'.format(compareFaceSimilarity(hFDEngine, hFREngine, inputImgA, inputImgB)))
     list = []
     initFeatureList("face", hFDEngine, hFREngine, list)
-    CatchUsbVideo("Video Capturing", 0, hFDEngine, hFREngine, list)
+    handleRealtimeVideo("Video Capturing", 0, hFDEngine, hFREngine, list)
     
     end_time = time.clock()
     print('total time: %s Seconds' % (end_time - start_time))
