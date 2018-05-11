@@ -6,3 +6,4 @@ src/dist
 src/*.spec
 src/*.log
 .settings
+src/arcsoft/utils/FileUtils.pyc

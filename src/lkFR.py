@@ -14,6 +14,8 @@ import sys
 import os
 from PIL.ImageFont import ImageFont
 import platform
+import thread
+import threading
 from win32api import GetSystemMetrics
 
 
@@ -111,15 +113,32 @@ def compareFaceSimilarity(hFDEngine, hFREngine, inputImgA, inputImgB):
 
 def file_extension(path): 
   return os.path.splitext(path)[1]
+# 
+# def getFeatureByMem(hFDEngine, hFREngine, img):
+#         inputImg = loadImage(inputImgPath)
+#         # Do Face Detect
+#         faceInfosA = doFaceDetection(hFDEngine, inputImg)
+#         if len(faceInfosA) < 1:
+# #             print(u'no face in Image ', inputImgPath)
+#             return None
+# 
+#         # Extract Face Feature
+#         faceFeature = extractFRFeature(hFREngine, inputImg, faceInfosA[0])
+#         if faceFeature == None:
+#             print(u'extract face feature in Image A failed')
+#             return None
+#         return faceFeature
 
 def getFeature(hFDEngine, hFREngine, inputImgPath):
         inputImg = loadImage(inputImgPath)
         # Do Face Detect
+        start_time = time.clock()
         faceInfosA = doFaceDetection(hFDEngine, inputImg)
         if len(faceInfosA) < 1:
 #             print(u'no face in Image ', inputImgPath)
             return None
-
+        end_time = time.clock()
+        print "FaceDetection=", end_time - start_time
         # Extract Face Feature
         faceFeature = extractFRFeature(hFREngine, inputImg, faceInfosA[0])
         if faceFeature == None:
@@ -258,8 +277,53 @@ def loadImage(filePath):
 
     return inputImg
 
+matchedName = ""
+mOnReadingImg = False
+mRun = True
+lastUpdateTime = time.time()
+class FaceRecognitionThread(threading.Thread):
+    def __init__(self, name, hFDEngine, hFREngine, list):
+        threading.Thread.__init__(self)
+        self.name = name
+        self.hFDEngine = hFDEngine
+        self.hFREngine = hFREngine
+        self.list = list
+    def run(self):
+        print "Starting " + self.name
+        global mOnReadingImg
+        global matchedName
+        global condition
+        while mRun:
+            condition.acquire()
+            condition.wait()
+            condition.release()
+            start_time = time.clock()
+            tmpName = ""
+            mOnReadingImg = True
+            # 释放锁
+            faceFeatureB = getFeature(hFDEngine, hFREngine, "lk.jpg")
+            mOnReadingImg = False
+            for i in range(0, len(list)):
+                fSimilScore = c_float(0.0)
+                feature = list[i]
+                AFR_FSDK_FacePairMatching(hFREngine, feature, faceFeatureB, byref(fSimilScore))
+                if fSimilScore.value > 0.5:
+                    print nameList[i], "matched"
+                    print(u'similarity is {0}'.format(fSimilScore))
+                    tmpName = nameList[i]
+            if tmpName != matchedName and time.time() - lastUpdateTime > 0.1:  # avoid to refresh too frequent
+                matchedName = tmpName
+            if faceFeatureB != None:
+                faceFeatureB.freeUnmanaged();
+            end_time = time.clock();
+#             print "timecost=", (end_time - start_time);
+ 
 
+threadLock = threading.Lock();
+condition = threading.Condition()
 def handleRealtimeVideo(window_name, camera_idx, hFDEngine, hFREngine, list):
+    frThread = FaceRecognitionThread(window_name, hFDEngine, hFREngine, list)
+    frThread.start()
     cv2.namedWindow(window_name, cv.CV_WINDOW_NORMAL)
     
     if platform.system() == u'Windows':
@@ -269,27 +333,26 @@ def handleRealtimeVideo(window_name, camera_idx, hFDEngine, hFREngine, list):
     # 视频来源，可以来自一段已存好的视频，也可以直接来自USB摄像头
     cap = cv2.VideoCapture(camera_idx)
  
+    global mOnReadingImg
+    global condition
+    global matchedName
     while cap.isOpened():
+
         ok, frame = cap.read()  # 读取一帧数据
         if not ok:            
             break                
         # 显示图像并等待10毫秒按键输入，输入‘q’退出程序
         ret, arr = cv2.imencode('.jpg', frame)
         a = arr.tostring()
-        fp = open('lk.jpg', 'wb')
-        fp.write(a)
-        fp.close()
-        faceFeatureB = getFeature(hFDEngine, hFREngine, "lk.jpg")
-        for i in range(0, len(list)):
-            fSimilScore = c_float(0.0)
-            feature = list[i]
-            AFR_FSDK_FacePairMatching(hFREngine, feature, faceFeatureB, byref(fSimilScore))
-            if fSimilScore.value > 0.5:
-                print nameList[i], "matched"
-                print(u'similarity is {0}'.format(fSimilScore))
-                cv2.putText(frame, nameList[i], (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 255), thickness=2)
-        if faceFeatureB != None:
-            faceFeatureB.freeUnmanaged();
+        if not mOnReadingImg:
+            fp = open('lk.jpg', 'wb')
+            fp.write(a)
+            fp.close()
+            condition.acquire()
+            condition.notifyAll()
+            condition.release()
+        cv2.putText(frame, matchedName, (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.15, (0, 255, 255), thickness=2)
+
         c = cv2.waitKey(10)
         if c & 0xFF == ord('q'):            
             break
@@ -306,6 +369,9 @@ def handleRealtimeVideo(window_name, camera_idx, hFDEngine, hFREngine, list):
 
 if __name__ == u'__main__':
     print(u'#####################################################')
+    ddir = sys.path[0]
+    print "workdir=", os.getcwd(), "\nfiledir=", ddir
+    os.chdir(ddir)
     start_time = time.clock()
 
     # init Engine
@@ -366,7 +432,7 @@ if __name__ == u'__main__':
 #     print(u'similarity between faceA and faceB is {0}'.format(compareFaceSimilarity(hFDEngine, hFREngine, inputImgA, inputImgB)))
     list = []
     initFeatureList("face", hFDEngine, hFREngine, list)
-    handleRealtimeVideo("Video Capturing", 0, hFDEngine, hFREngine, list)
+    handleRealtimeVideo("Tpson FaceRecognition", 0, hFDEngine, hFREngine, list)
     
     end_time = time.clock()
     print('total time: %s Seconds' % (end_time - start_time))
